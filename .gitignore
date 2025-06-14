@@ -1,2 +1,4 @@
 *.pyc
 __pycache__
+/DAV2/third_party/SuperGluePretrainedNetwork/models/weights
+/DAV2/metric_depth/checkpoints
