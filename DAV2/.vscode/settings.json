@@ -1,0 +1,7 @@
+{
+    "cmake.ignoreCMakeListsMissing": true,
+    "python.analysis.extraPaths": [
+        "./hloc"
+    ],
+    "git.ignoreLimitWarning": true
+}
