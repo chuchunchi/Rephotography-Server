@@ -21,7 +21,6 @@
 #include <Eigen/Dense>
 #include <cmath>
 
-#include "VideoSocketUDP.h"
 #include "Controller.h"
 #include "pid.h"
 
@@ -151,15 +150,16 @@ int main(int argc, char **argv) {
         return 1;
     }
   
-    std::map<std::string, int> fly_command={
-        {"original",-1},
-        {"left",'j'}, {"right",'l'},//左j，右l
-        {"forward",'i'}, {"backward",'k'},//前i，後k
-        {"up",'w'}, {"down",'s'},//上w，下s
-        {"lf",'u'},{"lb",'n'},{"rf",'o'},{"rb",'m'},//左前u，左後n，右前o，右後m
-        {"lu",'q'},{"ld",'z'},{"ru",'e'},{"rd",'c'},//左上q，左下z，右上e，右下c
-        {"fu",'t'},{"fd",'g'},{"bu",'f'},{"bd",'h'},//前上t，前下g，後上f，後下h
-        {"turnleft",'a'}, {"turnright",'d'}//左轉a，右轉d
+    std::map<std::string, CommandType> fly_command = {
+        {"original", CommandType::CUSTOM},
+        {"left", CommandType::LEFT},
+        {"right", CommandType::RIGHT},
+        {"forward", CommandType::FORWARD},
+        {"backward", CommandType::BACKWARD},
+        {"up", CommandType::UP},
+        {"down", CommandType::DOWN},
+        {"turnleft", CommandType::TURN_LEFT},
+        {"turnright", CommandType::TURN_RIGHT}
     };
 
     string orb_dir = "original";
@@ -452,33 +452,43 @@ int main(int argc, char **argv) {
                                             continue;
                                         }
                                     }
-                                    cout<<"[DEBUG] Sending KADFP command to drone - Direction: "<<kadfp_dir<<" Command key: "<<fly_command[kadfp_dir]<<" Velocity: "<<kadfp_v<<endl;
-                                    UserControl(fly_command[kadfp_dir], kadfp_v, 0);
-                                }
-                                if(orba_curr>rot_threshold){
-                                    cout<<"[DEBUG] Sending rotation command to drone - Angle: "<<orba_curr<<endl;
-                                    usleep(5000);
+                                    cout<<"[DEBUG] Sending KADFP command to drone - Direction: "<<kadfp_dir<<" Command type: "<<static_cast<int>(fly_command[kadfp_dir])<<" Velocity: "<<kadfp_v<<endl;
+                                    
+                                    // Use the new unified command interface
+                                    controller->executeCommand(DroneCommand(fly_command[kadfp_dir], kadfp_v));
+                                    
+                                    if(orba_curr>rot_threshold){
+                                        cout<<"[DEBUG] Sending rotation command to drone - Angle: "<<orba_curr<<endl;
+                                        usleep(5000);
+                                        if(input_mode == 0 || input_mode == 2) {
+                                            if (controller->isConnected()) {
+                                                // Use the new unified command interface for rotation
+                                                if(orba_curr > 0) {
+                                                    controller->executeCommand(DroneCommand(CommandType::TURN_RIGHT, orba_curr));
+                                                } else {
+                                                    controller->executeCommand(DroneCommand(CommandType::TURN_LEFT, -orba_curr));
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    cout<<"[controller] ORB command - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
                                     if(input_mode == 0 || input_mode == 2) {
-                                        if (controller->isConnected()) {
-                                            controller->sendCommand(0,0,0,orba_curr,true);
+                                        if (!controller->isConnected()) {
+                                            cout << "[Controller] Connection lost, attempting to reconnect..." << endl;
+                                            if (!initializeController()) {
+                                                cerr << "[Error] Failed to reconnect to Android app" << endl;
+                                                continue;
+                                            }
                                         }
+                                        cout<<"[DEBUG] Sending ORB command to drone - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
+                                        
+                                        // Use the new unified command interface for direct velocity control
+                                        controller->executeCommand(DroneCommand(orbv_curr[0], orbv_curr[1], orbv_curr[2], orba_curr, true));
                                     }
                                 }
-                            }else{
-                                cout<<"[controller] ORB command - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
-                                if(input_mode == 0 || input_mode == 2) {
-                                    if (!controller->isConnected()) {
-                                        cout << "[Controller] Connection lost, attempting to reconnect..." << endl;
-                                        if (!initializeController()) {
-                                            cerr << "[Error] Failed to reconnect to Android app" << endl;
-                                            continue;
-                                        }
-                                    }
-                                    cout<<"[DEBUG] Sending ORB command to drone - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
-                                    controller->sendCommand(orbv_curr[0],orbv_curr[1],orbv_curr[2],orba_curr,true);
-                                }
+                                usleep(100);
                             }
-                            usleep(100);
                         }
                         // 系統无人机控制end
                     }
