@@ -4,6 +4,7 @@
 #if defined(__unix__)  || defined(__linux__)
 #define INVALID_SOCKET -1 //For linux.
 #define SOCKET_ERROR -1  // For linux.
+#include <linux/tcp.h>  // For TCP keepalive options
 #endif
 
 Controller::Controller(const std::string& ip) : cap(nullptr), controlfd(-1), phone_ip(ip) {
@@ -98,7 +99,7 @@ void Controller::initControlSocket() {
         controlfd = -1;
     }
 
-    controlfd = socket(AF_INET, SOCK_STREAM, 0);  // Changed IPPROTO_TCP to 0
+    controlfd = socket(AF_INET, SOCK_STREAM, 0);
     if (controlfd == -1) {
         std::cerr << "[Controller] Failed to create control socket: " << strerror(errno) << std::endl;
         return;
@@ -120,12 +121,12 @@ void Controller::initControlSocket() {
     }
 
     // Initialize address structure
-    memset(&controlInfo, 0, sizeof(controlInfo));  // Changed from control_addrlen to sizeof(controlInfo)
-    controlInfo.sin_family = AF_INET;  // Changed from PF_INET to AF_INET
+    memset(&controlInfo, 0, sizeof(controlInfo));
+    controlInfo.sin_family = AF_INET;
     controlInfo.sin_port = htons(8080);
 
     // Connect to phone's IP for control commands
-    if (inet_pton(AF_INET, phone_ip.c_str(), &(controlInfo.sin_addr)) <= 0) {  // Changed == 0 to <= 0
+    if (inet_pton(AF_INET, phone_ip.c_str(), &(controlInfo.sin_addr)) <= 0) {
         std::cerr << "[Controller] Invalid phone IP address: " << phone_ip << std::endl;
         close(controlfd);
         controlfd = -1;
@@ -138,8 +139,30 @@ void Controller::initControlSocket() {
         std::cerr << "[Controller] Failed to set SO_REUSEADDR: " << strerror(errno) << std::endl;
     }
 
+    // Set keepalive options
+    opt = 1;
+    if (setsockopt(controlfd, SOL_SOCKET, SO_KEEPALIVE, &opt, sizeof(opt)) < 0) {
+        std::cerr << "[Controller] Failed to set SO_KEEPALIVE: " << strerror(errno) << std::endl;
+    }
+
+    // Set TCP keepalive parameters
+    int keepidle = 60;  // Start sending keepalive packets after 60 seconds of inactivity
+    int keepinterval = 5;  // Send keepalive packets every 5 seconds
+    int keepcount = 3;  // Number of unacknowledged keepalive packets before considering connection dead
+
+    if (setsockopt(controlfd, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle)) < 0) {
+        std::cerr << "[Controller] Failed to set TCP_KEEPIDLE: " << strerror(errno) << std::endl;
+    }
+    if (setsockopt(controlfd, IPPROTO_TCP, TCP_KEEPINTVL, &keepinterval, sizeof(keepinterval)) < 0) {
+        std::cerr << "[Controller] Failed to set TCP_KEEPINTVL: " << strerror(errno) << std::endl;
+    }
+    if (setsockopt(controlfd, IPPROTO_TCP, TCP_KEEPCNT, &keepcount, sizeof(keepcount)) < 0) {
+        std::cerr << "[Controller] Failed to set TCP_KEEPCNT: " << strerror(errno) << std::endl;
+    }
+
+    // Set longer timeouts for send and receive
     struct timeval timeout;
-    timeout.tv_sec = 3;  // 3 seconds timeout
+    timeout.tv_sec = 10;  // 10 seconds timeout
     timeout.tv_usec = 0;
     if (setsockopt(controlfd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
         std::cerr << "[Controller] Failed to set socket receive timeout: " << strerror(errno) << std::endl;
@@ -159,7 +182,7 @@ void Controller::connectToControlSignalServer() {
     }
 
     // This function establishes TCP connection to Android app for sending control commands
-    int ret = connect(controlfd, (struct sockaddr *)&controlInfo, sizeof(controlInfo));  // Changed control_addrlen to sizeof(controlInfo)
+    int ret = connect(controlfd, (struct sockaddr *)&controlInfo, sizeof(controlInfo));
     if (ret == SOCKET_ERROR) {
         if (errno == EINPROGRESS) {
             // Connection is in progress (non-blocking socket)
@@ -210,29 +233,27 @@ void Controller::connectToControlSignalServer() {
         }
     }
     
-    // Set socket back to blocking mode
-    int flags = fcntl(controlfd, F_GETFL, 0);
-    if (flags != -1) {
-        fcntl(controlfd, F_SETFL, flags & ~O_NONBLOCK);
-    }
-    
     std::cout << "[Controller] Successfully connected to Android app for control commands" << std::endl;
 }
 
 void Controller::sendControlSignal(const DroneCommand& cmd) {
     string controlSignal;
     
+    // std::cout << "[DEBUG] Preparing to send command - Type: " << static_cast<int>(cmd.type) << std::endl;
+    
     // Format control signal based on command type
     if (cmd.type == CommandType::CUSTOM) {
         // Apply speed limits if requested
         double vx = cmd.vx, vy = cmd.vy, vz = cmd.vz * 2, vr = cmd.vr;  // Note: vz is doubled
+        // std::cout << "[DEBUG] Custom command velocities - vx: " << vx << " vy: " << vy << " vz: " << vz << " vr: " << vr << std::endl;
         if (cmd.speed_limit) {
             vx = setLimitation(vx, 0, 0.6);
             vy = setLimitation(vy, 0, 0.6);
             vz = setLimitation(vz, 0, 0.6);
             vr = setLimitation(vr, 0, 8);
+            // std::cout << "[DEBUG] After speed limit - vx: " << vx << " vy: " << vy << " vz: " << vz << " vr: " << vr << std::endl;
         }
-        controlSignal = "2,Custom," + to_string(vy) + "," + to_string(vx) + "," + to_string(vr) + "," + to_string(vz);
+        controlSignal = "2,Custom," + to_string(vy) + "," + to_string(vx) + "," + to_string(vz) + "," + to_string(vr);
     } else {
         // Handle predefined commands
         switch (cmd.type) {
@@ -271,33 +292,50 @@ void Controller::sendControlSignal(const DroneCommand& cmd) {
 
     std::cout << "[Controller] Sending control signal: " << controlSignal << std::endl;
 
-    // Ensure connection is established
-    if (!isConnected()) {
-        initControlSocket();
-        try {
-            connectToControlSignalServer();
-        } catch (const std::exception& e) {
-            std::cerr << "[Controller] Failed to establish connection: " << e.what() << std::endl;
-            return;
+    // Try to send the command up to 3 times
+    for (int attempt = 0; attempt < 3; attempt++) {
+        std::cout << "[DEBUG] Attempt " << (attempt + 1) << " to send command" << std::endl;
+        
+        // Check connection and reconnect if needed
+        if (!isConnected()) {
+            std::cout << "[DEBUG] Connection lost, attempting to reconnect..." << std::endl;
+            try {
+                initControlSocket();
+                connectToControlSignalServer();
+            } catch (const std::exception& e) {
+                std::cerr << "[Controller] Failed to establish connection: " << e.what() << std::endl;
+                if (attempt == 2) {  // Last attempt
+                    return;
+                }
+                continue;
+            }
         }
-    }
 
-    // Send the command
-    try {
-        int iResult = send(controlfd, controlSignal.c_str(), (int)strlen(controlSignal.c_str()), 0);
-        if (iResult == SOCKET_ERROR) {
-            throw std::runtime_error("Send failed");
+        // Send the command
+        try {
+            std::cout << "[DEBUG] Sending command to socket " << controlfd << std::endl;
+            int iResult = send(controlfd, controlSignal.c_str(), (int)strlen(controlSignal.c_str()), 0);
+            if (iResult == SOCKET_ERROR) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    std::cout << "[DEBUG] Socket busy, waiting before retry..." << std::endl;
+                    // Socket is busy, wait a bit and try again
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                throw std::runtime_error("Send failed");
+            }
+            std::cout << "[DEBUG] Successfully sent " << iResult << " bytes" << std::endl;
+            return;  // Successfully sent
         }
-    }
-    catch (const std::exception& e) {
-        std::cerr << "[Controller] Error sending command: " << e.what() << std::endl;
-        if (controlfd != -1) {
-#if defined(__unix__) || defined(__linux__)
-            close(controlfd);
-#elif defined(_WIN32) || defined(WIN32)
-            closesocket(controlfd);
-#endif
-            controlfd = -1;
+        catch (const std::exception& e) {
+            std::cerr << "[Controller] Error sending command: " << e.what() << std::endl;
+            if (controlfd != -1) {
+                close(controlfd);
+                controlfd = -1;
+            }
+            if (attempt == 2) {  // Last attempt
+                return;
+            }
         }
     }
 }

@@ -182,20 +182,21 @@ int main(int argc, char **argv) {
     std::vector<ORB_SLAM3::KeyFrame*> vpKFs={};
     int traj_len = 0;
     int delay_count = 0;
+    bool rtmpInitialized = false;
 
     if(inspection_mode == 1){
-        cout << "[DEBUG] Inspection mode: Loading keyframes from atlas..." << endl;
+        // cout << "[DEBUG] Inspection mode: Loading keyframes from atlas..." << endl;
         try {
             vpKFs = SLAM.GetAllKeyFramesFromAtlas();
             if(vpKFs.empty()) {
                 cerr << "[Error] No keyframes loaded from atlas" << endl;
                 return 1;
             }
-            cout << "[DEBUG] Successfully loaded " << vpKFs.size() << " keyframes from atlas" << endl;
+            // cout << "[DEBUG] Successfully loaded " << vpKFs.size() << " keyframes from atlas" << endl;
             
             sort(vpKFs.begin(),vpKFs.end(),ORB_SLAM3::KeyFrame::lId);
             traj_len = vpKFs.size();
-            cout << "[DEBUG] Sorted keyframes, trajectory length: " << traj_len << endl;
+            // cout << "[DEBUG] Sorted keyframes, trajectory length: " << traj_len << endl;
         } catch (const std::exception& e) {
             cerr << "[Error] Failed to load keyframes: " << e.what() << endl;
             return 1;
@@ -215,7 +216,7 @@ int main(int argc, char **argv) {
             std::cout<< "[system] ================== [total loop]: " << counter_loop <<" =================="<<endl;
             cv::Mat im;
             cv::Mat imRGB;
-            float vx=0.1,vy=0.1,vz=0.1;
+            float vx=0.0,vy=0.0,vz=0.0;
             if(input_mode == 0){ // 由終端參數決定輸入來源爲無人機 0 或使用影片模擬輸入 1
                 // 载入一张无人机畫面
                 cout<<"[Tips] Step1-1:從 無人機 接收一幀畫面。"<<endl;
@@ -225,7 +226,7 @@ int main(int argc, char **argv) {
                 vz = controller->getvz();
                 cout<<"[controller] vx vy vz: "<<vx<<" "<<vy<<" "<<vz<<endl;
                 if(im.empty()){
-                    std::cout <<"[system] loop["<< counter_loop << "] ====> frame empty." << endl;
+                    // std::cout <<"[system] loop["<< counter_loop << "] ====> frame empty." << endl;
                     usleep(50000);
                     continue;
                 }
@@ -235,33 +236,33 @@ int main(int argc, char **argv) {
             else if(input_mode==2){ // rtmp input
                 try {
                     if(SLAM.GetKey() == 27) { // ESC key
-                        std::cout << "[system] Stopping RTMP stream..." << std::endl;
+                        std::cout << "[system] RTMP stream ended" << std::endl;
                         controller->stop();  // This will stop the RTMP stream
                         break;
                     }
 
                     // Only set RTMP URL once at the start
-                    static bool rtmpInitialized = false;
                     if (!rtmpInitialized) {
-                        std::cout << "[DEBUG] Initializing RTMP with URL: " << rtmpUrl << std::endl;
+                        // std::cout << "[DEBUG] Initializing RTMP with URL: " << rtmpUrl << std::endl;
                         controller->setRTMPUrl(rtmpUrl);
                         rtmpInitialized = true;
                     }
 
                     // Get frame with minimal delay
-                    std::cout << "[DEBUG] Attempting to get frame from RTMP stream..." << std::endl;
+                    //std::// cout << "[DEBUG] Attempting to get frame from RTMP stream..." << std::endl;
                     im = controller->getImage();
+
                     if(im.empty()) {
                         std::cerr << "[Error] Failed to get image from RTMP stream - retrying..." << std::endl;
                         usleep(100000); // Wait 100ms before retry
                         continue;
                     }
                     
-                    std::cout << "[DEBUG] Successfully got RTMP frame - Size: " << im.size() << " Channels: " << im.channels() << std::endl;
+                    // std::cout << "[DEBUG] Successfully got RTMP frame - Size: " << im.size() << " Channels: " << im.channels() << std::endl;
                     
                     // Convert frame to BGR if it's not already
                     if(im.channels() != 3) {
-                        std::cout << "[DEBUG] Converting frame from " << im.channels() << " channels to BGR" << std::endl;
+                        // std::cout << "[DEBUG] Converting frame from " << im.channels() << " channels to BGR" << std::endl;
                         cv::cvtColor(im, im, cv::COLOR_YUV2BGR_I420);
                     }
                     
@@ -271,17 +272,18 @@ int main(int argc, char **argv) {
                     }
 
                     // Undistort with pre-allocated output
-                    std::cout << "[DEBUG] Undistorting frame..." << std::endl;
+                    // std::cout << "[DEBUG] Undistorting frame..." << std::endl;
                     cv::undistort(im, imRGB, K, distCoeffs);
+
                     if(imRGB.empty()) {
                         std::cerr << "[Error] Undistorted frame is empty - skipping frame" << std::endl;
                         continue;
                     }
-                    std::cout << "[DEBUG] Frame undistorted successfully - Size: " << imRGB.size() << std::endl;
+                    // std::cout << "[DEBUG] Frame undistorted successfully - Size: " << imRGB.size() << std::endl;
 
-                    vx = controller->getvx();
-                    vy = controller->getvy();
-                    vz = controller->getvz();
+                    // vx = controller->getvx();
+                    // vy = controller->getvy();
+                    // vz = controller->getvz();
                     
                 } catch (const std::exception& e) {
                     std::cerr << "[Error] RTMP error: " << e.what() << std::endl;
@@ -354,7 +356,7 @@ int main(int argc, char **argv) {
 
                 // 如果發生地圖融合，更新地图中的所有关键帧
                 if(SLAM.getMergeState()){
-                    cout << "[DEBUG] Map merge detected, updating keyframes..." << endl;
+                    // cout << "[DEBUG] Map merge detected, updating keyframes..." << endl;
                     try {
                         vpKFs = SLAM.GetAllKeyFramesFromMergedMap();
                         if(vpKFs.empty()) {
@@ -362,14 +364,14 @@ int main(int argc, char **argv) {
                             continue;
                         }
                         sort(vpKFs.begin(),vpKFs.end(),ORB_SLAM3::KeyFrame::lId);
-                        cout << "[DEBUG] Successfully updated keyframes after merge, count: " << vpKFs.size() << endl;
+                        // cout << "[DEBUG] Successfully updated keyframes after merge, count: " << vpKFs.size() << endl;
                     } catch (const std::exception& e) {
                         cerr << "[Error] Failed to update keyframes after merge: " << e.what() << endl;
                         continue;
                     }
                 }
 
-                cout << "[DEBUG] Accessing keyframe at index: " << kf_pose_idx << " (total: " << vpKFs.size() << ")" << endl;
+                // cout << "[DEBUG] Accessing keyframe at index: " << kf_pose_idx << " (total: " << vpKFs.size() << ")" << endl;
                 if(kf_pose_idx >= vpKFs.size()) {
                     cerr << "[Error] Keyframe index out of bounds" << endl;
                     break;
@@ -379,7 +381,7 @@ int main(int argc, char **argv) {
                 try {
                     Twc_video = vpKFs[kf_pose_idx]->GetPoseInverse(); //获取当前关键帧的位姿
                     int v_idx = vpKFs[kf_pose_idx]->mnFrameId; //获取当前关键帧在所有幀中的id，用於從參考視頻中找到對應的幀
-                    cout << "[DEBUG] Successfully got keyframe pose and frame ID: " << v_idx << endl;
+                    // cout << "[DEBUG] Successfully got keyframe pose and frame ID: " << v_idx << endl;
                     cout<< "[system] kf_pose_idx(v_idx) / traj_len: " << kf_pose_idx << "(" << v_idx <<") / "<<traj_len<<endl;
                     
                     if((fabs(vx)>0 || fabs(vy)>0 || fabs(vz)>0) && delay_count<5){//如果無人機在運動中，則不進行指令計算
@@ -444,8 +446,10 @@ int main(int argc, char **argv) {
                                 float kadfp_v = kadfp_error/200;
                                 if(kadfp_v>0.3) kadfp_v = 0.3;
                                 cout<<"[controller] KADFP command - Direction: "<<kadfp_dir<<" Velocity: "<<kadfp_v<<endl;
+                                // cout << "[DEBUG] Current input_mode: " << input_mode << endl;
                                 if(input_mode == 0 || input_mode == 2) {
-                                    if (!controller->isConnected()) {
+                                    bool is_connected = controller->isConnected();
+                                    if (!is_connected) {
                                         cout << "[Controller] Connection lost, attempting to reconnect..." << endl;
                                         if (!initializeController()) {
                                             cerr << "[Error] Failed to reconnect to Android app" << endl;
@@ -455,7 +459,11 @@ int main(int argc, char **argv) {
                                     cout<<"[DEBUG] Sending KADFP command to drone - Direction: "<<kadfp_dir<<" Command type: "<<static_cast<int>(fly_command[kadfp_dir])<<" Velocity: "<<kadfp_v<<endl;
                                     
                                     // Use the new unified command interface
-                                    controller->executeCommand(DroneCommand(fly_command[kadfp_dir], kadfp_v));
+                                    // cout << "[DEBUG] Creating KADFP DroneCommand..." << endl;
+                                    DroneCommand cmd(fly_command[kadfp_dir], kadfp_v);
+                                    // cout << "[DEBUG] Executing KADFP command..." << endl;
+                                    controller->executeCommand(cmd);
+                                    // cout << "[DEBUG] KADFP command executed" << endl;
                                     
                                     if(orba_curr>rot_threshold){
                                         cout<<"[DEBUG] Sending rotation command to drone - Angle: "<<orba_curr<<endl;
@@ -464,31 +472,48 @@ int main(int argc, char **argv) {
                                             if (controller->isConnected()) {
                                                 // Use the new unified command interface for rotation
                                                 if(orba_curr > 0) {
+                                                    // cout << "[DEBUG] Creating TURN_RIGHT command..." << endl;
                                                     controller->executeCommand(DroneCommand(CommandType::TURN_RIGHT, orba_curr));
                                                 } else {
+                                                    // cout << "[DEBUG] Creating TURN_LEFT command..." << endl;
                                                     controller->executeCommand(DroneCommand(CommandType::TURN_LEFT, -orba_curr));
                                                 }
+                                                // cout << "[DEBUG] Rotation command executed" << endl;
                                             }
                                         }
                                     }
                                 } else {
-                                    cout<<"[controller] ORB command - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
-                                    if(input_mode == 0 || input_mode == 2) {
-                                        if (!controller->isConnected()) {
-                                            cout << "[Controller] Connection lost, attempting to reconnect..." << endl;
-                                            if (!initializeController()) {
-                                                cerr << "[Error] Failed to reconnect to Android app" << endl;
-                                                continue;
-                                            }
-                                        }
-                                        cout<<"[DEBUG] Sending ORB command to drone - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
-                                        
-                                        // Use the new unified command interface for direct velocity control
-                                        controller->executeCommand(DroneCommand(orbv_curr[0], orbv_curr[1], orbv_curr[2], orba_curr, true));
-                                    }
+                                    // cout << "[DEBUG] Input mode check failed - current mode: " << input_mode << endl;
                                 }
-                                usleep(100);
+                            } else {
+                                // cout << "[DEBUG] Using ORB commands - orb_align: " << orb_align << ", only_kadfp: " << only_kadfp << endl;
+                                cout<<"[controller] ORB command - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
+                                // cout << "[DEBUG] Current input_mode: " << input_mode << endl;
+                                if(input_mode == 0 || input_mode == 2) {
+                                    // cout << "[DEBUG] Input mode check passed" << endl;
+                                    // cout << "[DEBUG] Checking controller connection..." << endl;
+                                    bool is_connected = controller->isConnected();
+                                    // cout << "[DEBUG] Controller connection status: " << (is_connected ? "Connected" : "Disconnected") << endl;
+                                    if (!is_connected) {
+                                        cout << "[Controller] Connection lost, attempting to reconnect..." << endl;
+                                        if (!initializeController()) {
+                                            cerr << "[Error] Failed to reconnect to Android app" << endl;
+                                            continue;
+                                        }
+                                    }
+                                    cout<<"[DEBUG] Sending ORB command to drone - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
+                                    
+                                    // Use the new unified command interface for direct velocity control
+                                    // cout << "[DEBUG] Creating ORB DroneCommand with velocities..." << endl;
+                                    DroneCommand cmd(orbv_curr[0], orbv_curr[1], orbv_curr[2], orba_curr, true);
+                                    // cout << "[DEBUG] Executing ORB command..." << endl;
+                                    controller->executeCommand(cmd);
+                                    // cout << "[DEBUG] ORB command executed" << endl;
+                                } else {
+                                    // cout << "[DEBUG] Input mode check failed - current mode: " << input_mode << endl;
+                                }
                             }
+                            usleep(100);
                         }
                         // 系統无人机控制end
                     }
@@ -498,20 +523,20 @@ int main(int argc, char **argv) {
                 }
                 
                 if(end_flag == true){
-                    cout << "[system] 影片结束，任務完成。 " << std::endl;
+                    // cout << "[system] 影片结束，任務完成。 " << std::endl;
                     
                     // Save trajectories before potential exit
                     try {
                         if(inspection_mode == 0){
-                            cout << "[system] Saving trajectories to target directory..." << endl;
+                            // cout << "[system] Saving trajectories to target directory..." << endl;
                             SLAM.SaveTrajectoryTUM("../../../data/target/"+target_name+"/trajs_tar.txt");
                             SLAM.SaveKeyFrameTrajectoryTUM("../../../data/target/"+target_name+"/trajs_tar_kf.txt");
                         }else{
-                            cout << "[system] Saving trajectories to outputs directory..." << endl;
+                            // cout << "[system] Saving trajectories to outputs directory..." << endl;
                             SLAM.SaveTrajectoryTUM("../../../data/outputs/"+ex_name+"/trajs_res.txt");
                             SLAM.SaveKeyFrameTrajectoryTUM("../../../data/outputs/"+ex_name+"/trajs_res_kf.txt");
                         }
-                        cout << "[system] Trajectories saved successfully." << endl;
+                        // cout << "[system] Trajectories saved successfully." << endl;
                     } catch (const std::exception& e) {
                         std::cerr << "[Error] Failed to save trajectories: " << e.what() << std::endl;
                     }
@@ -520,7 +545,7 @@ int main(int argc, char **argv) {
                     auto stop = chrono::system_clock::now();
                     auto stoptime = chrono::duration_cast<chrono::milliseconds>(stop - start);
                     double worktime = double(stoptime.count())/1000.0;
-                    cout << "[system] total cost: " << worktime << "s" << endl;
+                    // cout << "[system] total cost: " << worktime << "s" << endl;
                     while(1){
                         int key = -1;
                         key = SLAM.GetKey();
@@ -539,15 +564,15 @@ int main(int argc, char **argv) {
             // Save trajectories even if exception occurs
             try {
                 if(inspection_mode == 0){
-                    cout << "[system] Saving trajectories to target directory..." << endl;
+                    // cout << "[system] Saving trajectories to target directory..." << endl;
                     SLAM.SaveTrajectoryTUM("../../../data/target/"+target_name+"/trajs_tar.txt");
                     SLAM.SaveKeyFrameTrajectoryTUM("../../../data/target/"+target_name+"/trajs_tar_kf.txt");
                 }else{
-                    cout << "[system] Saving trajectories to outputs directory..." << endl;
+                    // cout << "[system] Saving trajectories to outputs directory..." << endl;
                     SLAM.SaveTrajectoryTUM("../../../data/outputs/"+ex_name+"/trajs_res.txt");
                     SLAM.SaveKeyFrameTrajectoryTUM("../../../data/outputs/"+ex_name+"/trajs_res_kf.txt");
                 }
-                cout << "[system] Trajectories saved successfully." << endl;
+                // cout << "[system] Trajectories saved successfully." << endl;
             } catch (const std::exception& e) {
                 std::cerr << "[Error] Failed to save trajectories: " << e.what() << std::endl;
             }

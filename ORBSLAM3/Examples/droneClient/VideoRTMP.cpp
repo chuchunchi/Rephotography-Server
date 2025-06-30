@@ -25,6 +25,10 @@ VideoRTMP::VideoRTMP(const std::string& url) :
     lastProcessedFrameTime(std::chrono::steady_clock::now()),
     currentFPS(0),
     processingFPS(0),
+    adaptiveFPS(30),
+    consecutiveDrops(0),
+    consecutiveSuccesses(0),
+    bufferUtilization(0),
     avgProcessingTime(0),
     avgServerDelay(0),
     serverProcessingCount(0),
@@ -47,38 +51,54 @@ VideoRTMP::~VideoRTMP() {
     stop();
 }
 
-bool VideoRTMP::shouldDropFrame() const {
-    // Drop frame if buffer is getting full
+bool VideoRTMP::shouldDropFrame() {
+    // Calculate buffer utilization
     double bufferFullness = static_cast<double>(frameBuffer.size()) / BUFFER_SIZE;
+    bufferUtilization = bufferFullness;
 
-    if (bufferFullness >= 0.95) {
+    // Only drop frames if buffer is critically full
+    if (bufferFullness >= 0.98) {
         return true;
     }
     
-    // Drop frame if server is still processing
-    if (serverBusy && bufferFullness > 0.5) {
+    // Only drop frames if server is very busy
+    if (serverBusy && bufferFullness > 0.8) {
         return true;
     }
     
-    // Calculate drop rate based on server processing time
+    // Calculate drop rate based on server processing time - Much less aggressive
     if (serverProcessingCount > 0) {
         double dropProbability = 0.0;
         
-        // If average server delay is high, increase drop rate
-        if (avgServerDelay > 500.0) { // 500ms threshold
-            dropProbability = 0.6;  // Drop 80% of frames
-        } else if (avgServerDelay > 300.0) {
-            dropProbability = 0.4;  // Drop 60% of frames
-        } else if (avgServerDelay > 200.0) {
-            dropProbability = 0.2;  // Drop 40% of frames
+        // Only drop frames if server delay is extremely high
+        if (avgServerDelay > 1200.0) {
+            dropProbability = 0.2;  // Drop only 10% of frames
+        } else if (avgServerDelay > 800.0) {
+            dropProbability = 0.1;  // Drop only 5% of frames
         }
         
-        if (bufferFullness > 0.7) {
-            dropProbability += 0.2;
+        if (bufferFullness > 0.9) {
+            dropProbability += 0.05;  // Very small increase
+        }
+
+        // Adaptive drop rate based on consecutive drops
+        if (consecutiveDrops > 5) {
+            dropProbability *= 0.3; // Significantly reduce drop rate if we've been dropping too much
         }
 
         // Random drop based on probability
-        return ((double)rand() / RAND_MAX) < dropProbability;
+        bool shouldDrop = ((double)rand() / RAND_MAX) < dropProbability;
+        
+        // Update consecutive counters
+        if (shouldDrop) {
+            consecutiveDrops++;
+            consecutiveSuccesses = 0;
+        } else {
+            consecutiveSuccesses++;
+            consecutiveDrops = 0;
+        }
+        
+        return shouldDrop;
     }
     
     return false;
@@ -124,7 +144,36 @@ void VideoRTMP::updateFPS() {
         currentFPS = frameCount / duration.count();
         frameCount = 0;
         lastFPSUpdate = now;
+        
+        // Update adaptive frame rate
+        updateAdaptiveFrameRate();
     }
+}
+
+void VideoRTMP::updateAdaptiveFrameRate() {
+    // Adaptive frame rate based on performance - Less aggressive
+    int newFPS = adaptiveFPS;
+    
+    // If we're dropping too many frames, reduce FPS slightly
+    if (consecutiveDrops > 8) {
+        newFPS = std::max(25, adaptiveFPS - 2);  // Don't go below 25 FPS
+        consecutiveDrops = 0;
+    }
+    // If we're doing well, gradually increase FPS
+    else if (consecutiveSuccesses > 15 && bufferUtilization < 0.7) {
+        newFPS = std::min(30, adaptiveFPS + 1);  // Increase more slowly
+        consecutiveSuccesses = 0;
+    }
+    // If server is struggling, reduce FPS slightly
+    else if (avgServerDelay > 500.0) {
+        newFPS = std::max(26, adaptiveFPS - 1);  // Don't reduce too much
+    }
+    // If buffer is getting full, reduce FPS slightly
+    else if (bufferUtilization > 0.9) {
+        newFPS = std::max(27, adaptiveFPS - 1);  // Don't reduce too much
+    }
+    
+    adaptiveFPS = newFPS;
 }
 
 double VideoRTMP::calculateOptimalDropRate() const {
@@ -132,20 +181,20 @@ double VideoRTMP::calculateOptimalDropRate() const {
     double processingRatio = processingFPS / currentFPS;
     
     // If processing is keeping up, no need to drop frames
-    if (processingRatio >= 0.95) return 0.0;
+    if (processingRatio >= 0.9) return 0.0;  // Reduced from 0.95
     
     // Calculate drop rate based on buffer fullness and processing speed
     double dropRate = 0.0;
     
-    if (bufferFullness > 0.8) {
-        // Buffer getting full, increase drop rate
-        dropRate = 0.5 + (bufferFullness - 0.8) * 2.5;
-    } else if (processingRatio < 0.5) {
+    if (bufferFullness > 0.9) {  // Increased from 0.8
+        // Buffer getting full, increase drop rate gradually
+        dropRate = 0.3 + (bufferFullness - 0.9) * 2.0;  // Reduced from 0.5 and 2.5
+    } else if (processingRatio < 0.6) {  // Increased from 0.5
         // Processing falling behind, drop frames based on ratio
-        dropRate = 1.0 - processingRatio;
+        dropRate = (1.0 - processingRatio) * 0.5;  // Added 0.5 multiplier to reduce drop rate
     }
     
-    return std::min(0.8, dropRate); // Never drop more than 80% of frames
+    return std::min(0.5, dropRate); // Never drop more than 50% of frames (reduced from 80%)
 }
 
 void VideoRTMP::updateServerProcessingTime(double processingTime) {
@@ -161,8 +210,8 @@ void VideoRTMP::updateServerProcessingTime(double processingTime) {
 
 void VideoRTMP::captureLoop() {
     int reconnectAttempts = 0;
-    const int maxReconnectAttempts = 3;
-    const auto minFrameInterval = std::chrono::milliseconds(33); // ~30 fps
+    const int maxReconnectAttempts = 10;
+    auto minFrameInterval = std::chrono::milliseconds(1000 / adaptiveFPS); // Use adaptive FPS
     
     cv::Mat frame;
     frame.reserve(1088 * 720 * 3);
@@ -185,6 +234,8 @@ void VideoRTMP::captureLoop() {
         auto timeSinceLastFrame = std::chrono::duration_cast<std::chrono::milliseconds>(
             frameStart - lastFrameTime);
         
+        // Use adaptive frame interval
+        minFrameInterval = std::chrono::milliseconds(1000 / adaptiveFPS);
         if (timeSinceLastFrame < minFrameInterval) {
             std::this_thread::sleep_for(minFrameInterval - timeSinceLastFrame);
             continue;
@@ -207,9 +258,9 @@ void VideoRTMP::captureLoop() {
         }
 
         // Resize if needed
-        if (frame.size() != cv::Size(1088, 720)) {
+        if (frame.size() != cv::Size(640, 480)) {
             try {
-                cv::resize(frame, frame, cv::Size(1088, 720), 0, 0, cv::INTER_LINEAR);
+                cv::resize(frame, frame, cv::Size(640, 480), 0, 0, cv::INTER_LINEAR);
             } catch (const cv::Exception& e) {
                 LOG_ERROR("[VideoRTMP] Error resizing frame: " << e.what());
                 continue;
@@ -250,10 +301,14 @@ void VideoRTMP::captureLoop() {
             updateMetrics(static_cast<double>(processingTime));
             
             LOG_DEBUG("[VideoRTMP] Stats: FPS=" << currentFPS 
+                      << " AdaptiveFPS=" << adaptiveFPS
                       << " ProcessingFPS=" << processingFPS
                       << " Dropped=" << droppedFrames
-                      << " Buffer=" << frameBuffer.size()
-                      << " ServerDelay=" << avgServerDelay << "ms");
+                      << " Buffer=" << frameBuffer.size() << "/" << BUFFER_SIZE
+                      << " BufferUtil=" << (bufferUtilization * 100) << "%"
+                      << " ServerDelay=" << avgServerDelay << "ms"
+                      << " ConsecDrops=" << consecutiveDrops
+                      << " ConsecSuccess=" << consecutiveSuccesses);
         }
     }
 }
@@ -267,12 +322,16 @@ bool VideoRTMP::connect() {
         // Try direct RTMP with optimized settings
         cap.open(rtmpUrl, cv::CAP_FFMPEG);
         if (!cap.isOpened()) {
-            // Enhanced FFmpeg pipeline with optimizations
+            // Enhanced FFmpeg pipeline with ultra-low latency optimizations
             std::string ffmpeg_pipeline = 
                 "ffmpeg -loglevel error"  // Reduced logging
                 " -fflags nobuffer"       // Disable input buffering
                 " -flags low_delay"       // Minimize latency
-                " -thread_queue_size 512" // Increased queue size
+                " -thread_queue_size 2048" // Increased queue size for better buffering
+                " -rtmp_live live"        // Enable live streaming mode
+                " -rtmp_buffer 1000"      // Ultra-low RTMP buffer size
+                " -probesize 32"          // Minimal probe size
+                " -analyzeduration 0"     // No analysis delay
                 " -i " + rtmpUrl + 
                 " -vcodec rawvideo"
                 " -pix_fmt bgr24"

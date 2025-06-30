@@ -26,7 +26,7 @@ private:
     std::condition_variable cv;
     std::thread captureThread;
     bool stopThread;
-    static const int BUFFER_SIZE = 10;  // Reduced buffer size for lower latency
+    static const int BUFFER_SIZE = 10 ;
     
     // Frame rate control
     std::chrono::steady_clock::time_point lastFrameTime;
@@ -35,6 +35,12 @@ private:
     const std::chrono::microseconds frameInterval{1000000 / targetFPS};
     std::atomic<double> currentFPS{0.0};
     std::atomic<double> processingFPS{0.0};
+    
+    // Adaptive frame rate control
+    std::atomic<int> adaptiveFPS{30};
+    std::atomic<int> consecutiveDrops{0};
+    std::atomic<int> consecutiveSuccesses{0};
+    std::atomic<double> bufferUtilization{0.0};
     
     // Server processing metrics
     std::atomic<double> avgProcessingTime{0};  // Average server processing time
@@ -48,11 +54,12 @@ private:
     std::atomic<double> bufferLatency{0};  // Time spent in buffer
     
     void captureLoop();
-    bool shouldDropFrame() const;
+    bool shouldDropFrame();
     bool Frame() const;
     void updateMetrics(double processingTime);
     bool isFrameValid(const cv::Mat& frame) const;
     void updateFPS();
+    void updateAdaptiveFrameRate();
     double calculateOptimalDropRate() const;
 
 public:
@@ -79,6 +86,12 @@ public:
     double getCurrentFPS() const { return currentFPS; }
     double getProcessingFPS() const { return processingFPS; }
     double getBufferLatency() const { return bufferLatency; }
+    
+    // Enhanced monitoring methods
+    int getAdaptiveFPS() const { return adaptiveFPS; }
+    double getBufferUtilization() const { return bufferUtilization; }
+    int getConsecutiveDrops() const { return consecutiveDrops; }
+    int getConsecutiveSuccesses() const { return consecutiveSuccesses; }
     
     // Maintain the same interface as VideoSocketUDP
     float getvx() { return vx; }
