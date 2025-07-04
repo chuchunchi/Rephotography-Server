@@ -37,6 +37,7 @@ string videoFile = "";
 int inspection_mode = 0;
 int only_kadfp = 0;
 int input_mode = 0;
+int frame_skip_ratio = 3;  // Process 1 in every 3 frames (configurable)
 
 Controller * controller = new Controller();
 
@@ -56,22 +57,22 @@ float getRotation(const Sophus::SE3f& Twc_curr, const Sophus::SE3f& Twc_video);
 bool initializeController() {
     int retry_count = 0;
     const int max_retries = 5;
-    
+
     while (retry_count < max_retries) {
         cout << "[Controller] Attempting to initialize controller connection (attempt " << retry_count + 1 << "/" << max_retries << ")" << endl;
-        
+
         if (controller->initializeConnection()) {
             cout << "[Controller] Successfully connected to Android app" << endl;
             return true;
         }
-        
+
         retry_count++;
         if (retry_count < max_retries) {
             cout << "[Controller] Connection failed, retrying in 2 seconds..." << endl;
             sleep(2);
         }
     }
-    
+
     cerr << "[Error] Failed to establish connection with Android app after " << max_retries << " attempts" << endl;
     return false;
 }
@@ -140,16 +141,16 @@ int main(int argc, char **argv) {
     float rot_threshold = 1.0;
     float kadfp_threshold = 15.0;
     int compare_times_threshold = 10;
-    
+
     ORB_SLAM3::System SLAM(vocFile, parameter_file, ORB_SLAM3::System::RGBD, true);// 声明 ORB-SLAM3 系统
     // float imageScale = SLAM.GetImageScale();
-    
+
     cv::VideoCapture video(videoFile);// 获取影片幀
     if (input_mode ==1 && !video.isOpened()) {
         std::cerr << "Failed to open the video file." << std::endl;
         return 1;
     }
-  
+
     std::map<std::string, CommandType> fly_command = {
         {"original", CommandType::CUSTOM},
         {"left", CommandType::LEFT},
@@ -169,13 +170,13 @@ int main(int argc, char **argv) {
     int sockfd;
     struct sockaddr_in servaddr;
     connection(sockfd, server_ip, server_port, servaddr);
-   
+
     bool start_flag = false;
     bool end_flag = false;
     int counter_loop = 0;//总循环计数器
     int curr_idx = -1;
     int compare_counter = 0;
-    
+
     int kf_pose_idx =0;
     int last_idx = 0;
     auto start = chrono::system_clock::now();
@@ -193,7 +194,7 @@ int main(int argc, char **argv) {
                 return 1;
             }
             // cout << "[DEBUG] Successfully loaded " << vpKFs.size() << " keyframes from atlas" << endl;
-            
+
             sort(vpKFs.begin(),vpKFs.end(),ORB_SLAM3::KeyFrame::lId);
             traj_len = vpKFs.size();
             // cout << "[DEBUG] Sorted keyframes, trajectory length: " << traj_len << endl;
@@ -210,7 +211,7 @@ int main(int argc, char **argv) {
                     start_flag =true;
                     cout<<"[system] Mission start."<<endl;
                     start = chrono::system_clock::now(); // 记录系统时间
-                } 
+                }
             }
 
             std::cout<< "[system] ================== [total loop]: " << counter_loop <<" =================="<<endl;
@@ -257,15 +258,15 @@ int main(int argc, char **argv) {
                         usleep(100000); // Wait 100ms before retry
                         continue;
                     }
-                    
+
                     // std::cout << "[DEBUG] Successfully got RTMP frame - Size: " << im.size() << " Channels: " << im.channels() << std::endl;
-                    
+
                     // Convert frame to BGR if it's not already
                     if(im.channels() != 3) {
                         // std::cout << "[DEBUG] Converting frame from " << im.channels() << " channels to BGR" << std::endl;
                         cv::cvtColor(im, im, cv::COLOR_YUV2BGR_I420);
                     }
-                    
+
                     // Resize to expected resolution if needed (ORB-SLAM typically works with 640x480)
                     if(im.size() != cv::Size(640, 480)) {
                         cv::resize(im, im, cv::Size(640, 480));
@@ -284,7 +285,7 @@ int main(int argc, char **argv) {
                     // vx = controller->getvx();
                     // vy = controller->getvy();
                     // vz = controller->getvz();
-                    
+
                 } catch (const std::exception& e) {
                     std::cerr << "[Error] RTMP error: " << e.what() << std::endl;
                     usleep(100000); // Wait 100ms before retry
@@ -308,9 +309,23 @@ int main(int argc, char **argv) {
             auto timestamp = chrono::duration_cast<chrono::milliseconds>(now - start);
             double ts = double(timestamp.count())/1000.0;
 
+            // Frame skipping to prevent buffer overflow
+            // Process only every Nth frame to reduce load
+            if (curr_idx % frame_skip_ratio != 0) {
+                cout << "[Skip] Skipping frame " << curr_idx << " (processing 1/" << frame_skip_ratio << " frames)" << endl;
+                // Still do SLAM tracking with previous depth if available
+                if(inspection_mode == 0) {
+                    int key = SLAM.GetKey();
+                    if(key == 27) break;
+                }
+                continue;
+            }
+
+            cout << "[Process] Processing frame " << curr_idx << " (every " << frame_skip_ratio << "th frame)" << endl;
+
             // Inside the main loop, before sending frame to server:
             auto serverProcessStart = std::chrono::steady_clock::now();
-            
+
             if(input_mode == 2) {
                 // Set server as busy before sending frame
                 controller->setRTMPBusy(true);
@@ -331,10 +346,10 @@ int main(int argc, char **argv) {
                 auto serverProcessEnd = std::chrono::steady_clock::now();
                 double processingTime = std::chrono::duration_cast<std::chrono::milliseconds>(
                     serverProcessEnd - serverProcessStart).count();
-                
+
                 controller->updateRTMPProcessingTime(processingTime);
                 controller->setRTMPBusy(false);
-                
+
                 if(processingTime > 1000) { // Log if processing takes more than 1 second
                     std::cout << "[Warning] High server processing time: " << processingTime << "ms" << std::endl;
                 }
@@ -376,14 +391,14 @@ int main(int argc, char **argv) {
                     cerr << "[Error] Keyframe index out of bounds" << endl;
                     break;
                 }
-                
+
                 Sophus::SE3f Twc_video;
                 try {
                     Twc_video = vpKFs[kf_pose_idx]->GetPoseInverse(); //获取当前关键帧的位姿
                     int v_idx = vpKFs[kf_pose_idx]->mnFrameId; //获取当前关键帧在所有幀中的id，用於從參考視頻中找到對應的幀
                     // cout << "[DEBUG] Successfully got keyframe pose and frame ID: " << v_idx << endl;
                     cout<< "[system] kf_pose_idx(v_idx) / traj_len: " << kf_pose_idx << "(" << v_idx <<") / "<<traj_len<<endl;
-                    
+
                     if((fabs(vx)>0 || fabs(vy)>0 || fabs(vz)>0) && delay_count<5){//如果無人機在運動中，則不進行指令計算
                         delay_count++;
                         cout<<"[system] delay_count: "<<delay_count<<endl;
@@ -401,19 +416,19 @@ int main(int argc, char **argv) {
                         std::istringstream iss(receivedString);
                         std::string kadfp_dir;
                         float kadfp_error = 0.0;
-                        
+
                         iss >> kadfp_dir >> kadfp_error;
                         compare_counter++;
 
                         // 處理orb位姿判斷移動和旋轉
                         std::vector<float> orbv_curr(3,0.0);
-                        orbv_curr = getDirection(Twc_curr, Twc_video); 
+                        orbv_curr = getDirection(Twc_curr, Twc_video);
                         float orba_curr = 0.0;
                         if(counter_loop>20 || SLAM.getMergeState()) orba_curr = getRotation(Twc_curr, Twc_video);
 
                         if(fabs(orbv_curr[0]+orbv_curr[1]+orbv_curr[2]) < trans_threshold && orba_curr < rot_threshold)
                             orb_align = true;
-                    
+
                         if(only_kadfp==1){
                             if(kadfp_error<kadfp_threshold) kadfp_align = true;
                             compare_times = compare_times_threshold * 3;
@@ -457,28 +472,24 @@ int main(int argc, char **argv) {
                                         }
                                     }
                                     cout<<"[DEBUG] Sending KADFP command to drone - Direction: "<<kadfp_dir<<" Command type: "<<static_cast<int>(fly_command[kadfp_dir])<<" Velocity: "<<kadfp_v<<endl;
-                                    
+
                                     // Use the new unified command interface
                                     // cout << "[DEBUG] Creating KADFP DroneCommand..." << endl;
                                     DroneCommand cmd(fly_command[kadfp_dir], kadfp_v);
                                     // cout << "[DEBUG] Executing KADFP command..." << endl;
                                     controller->executeCommand(cmd);
                                     // cout << "[DEBUG] KADFP command executed" << endl;
-                                    
+
                                     if(orba_curr>rot_threshold){
                                         cout<<"[DEBUG] Sending rotation command to drone - Angle: "<<orba_curr<<endl;
                                         usleep(5000);
                                         if(input_mode == 0 || input_mode == 2) {
                                             if (controller->isConnected()) {
                                                 // Use the new unified command interface for rotation
-                                                if(orba_curr > 0) {
+                                                if(orba_curr != 0) {
                                                     // cout << "[DEBUG] Creating TURN_RIGHT command..." << endl;
                                                     controller->executeCommand(DroneCommand(CommandType::TURN_RIGHT, orba_curr));
-                                                } else {
-                                                    // cout << "[DEBUG] Creating TURN_LEFT command..." << endl;
-                                                    controller->executeCommand(DroneCommand(CommandType::TURN_LEFT, -orba_curr));
                                                 }
-                                                // cout << "[DEBUG] Rotation command executed" << endl;
                                             }
                                         }
                                     }
@@ -502,7 +513,7 @@ int main(int argc, char **argv) {
                                         }
                                     }
                                     cout<<"[DEBUG] Sending ORB command to drone - X: "<<orbv_curr[0]<<" Y: "<<orbv_curr[1]<<" Z: "<<orbv_curr[2]<<" Rotation: "<<orba_curr<<endl;
-                                    
+
                                     // Use the new unified command interface for direct velocity control
                                     // cout << "[DEBUG] Creating ORB DroneCommand with velocities..." << endl;
                                     DroneCommand cmd(orbv_curr[0], orbv_curr[1], orbv_curr[2], orba_curr, true);
@@ -521,10 +532,10 @@ int main(int argc, char **argv) {
                     cerr << "[Error] Failed to get keyframe pose: " << e.what() << endl;
                     continue;
                 }
-                
+
                 if(end_flag == true){
                     // cout << "[system] 影片结束，任務完成。 " << std::endl;
-                    
+
                     // Save trajectories before potential exit
                     try {
                         if(inspection_mode == 0){
@@ -552,7 +563,7 @@ int main(int argc, char **argv) {
                         if(key ==' ') {
                             if(input_mode == 0 || input_mode == 2) controller->land();
                         }
-                        if(key == 27) break;//char 27 = 'esc' 
+                        if(key == 27) break;//char 27 = 'esc'
                         usleep(200000);
                     }
                     break;
@@ -560,7 +571,7 @@ int main(int argc, char **argv) {
             }
         }catch(const std::exception& e){
             std::cout << "Caught exception: " << e.what() << std::endl;
-            
+
             // Save trajectories even if exception occurs
             try {
                 if(inspection_mode == 0){
@@ -753,7 +764,7 @@ void recv_command(int sockfd, string& receivedString){
 void get_and_set_params(string parameterFile, string tar_name,int inspection_mode, cv::Mat *K, cv::Mat *distCoeffs){
     string str = "\"../../../data/target/" + tar_name + "/map\"";
     cv::FileStorage fs(parameterFile, cv::FileStorage::READ);
-    
+
     if (!fs.isOpened()) {
         cerr << "Failed to open parameter file: " << parameterFile << endl;
         exit(EXIT_FAILURE);
@@ -823,7 +834,7 @@ std::vector<float> getDirection(Sophus::SE3f Twc_curr, Sophus::SE3f Twc_video) {
     // cout<<"[system] delta_origin: "<<delta[2]<<" "<<delta[0]<<" "<<delta[1]<<endl;
     float dis = sqrt(delta[0]*delta[0]+delta[1]*delta[1]+delta[2]*delta[2])/alpha;
     int axis = std::distance(delta.begin(), std::max_element(delta.begin(), delta.end(), [](float a, float b) { return std::abs(a) < std::abs(b); }));
-    
+
     std::vector<std::string> directions = {"left", "right", "down", "up", "backward", "forward"};
     string bestdir = delta[axis] < 0 ? directions[axis * 2] : directions[axis * 2 + 1];
     cout<<"[system] ORB方向: "<<bestdir<< ", dis: "<<dis<<endl;
@@ -833,7 +844,7 @@ std::vector<float> getDirection(Sophus::SE3f Twc_curr, Sophus::SE3f Twc_video) {
         else delta[i] = delta[i] < 0 ? (-dis) : dis;
     }
 
-    std::vector<float> move = {delta[2],delta[0],delta[1]};
+    std::vector<float> move = {delta[0],delta[1],delta[2]};
     return move;
 }
 
@@ -850,7 +861,7 @@ float getRotation(const Sophus::SE3f& Twc_curr, const Sophus::SE3f& Twc_video) {
 
     // 將角度從弧度轉換為度
     float angle = theta * 180.0f / M_PI / 3;
-    
+
     if(angle > 5.0 && angle<90.0) angle = 5.0; //控制旋轉角度在5度以內
     else if(angle < -5.0 && angle>-90.0) angle = -5.0;
     else if(fabs(angle)>90.0) angle = 0.0;// 若超過180度則認定爲異常值，無效

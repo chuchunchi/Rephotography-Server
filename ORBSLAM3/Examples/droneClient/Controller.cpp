@@ -24,12 +24,12 @@ Controller::Controller(const std::string& ip) : cap(nullptr), controlfd(-1), pho
 
 // 	controlInfo.sin_family = PF_INET;
 //     //mobile_serverInfo.sin_addr.s_addr = inet_addr("192.168.0.175");
-// 	if (inet_pton(AF_INET, "192.168.1.30", &(controlInfo.sin_addr)) == 0) { // IPv4  
+// 	if (inet_pton(AF_INET, "192.168.1.30", &(controlInfo.sin_addr)) == 0) { // IPv4
 // 		perror("socket");
 // 	}
 //     controlInfo.sin_port = htons(8080);*/
 
-// 	cap = new VideoSocketUDP(); 
+// 	cap = new VideoSocketUDP();
 
 // // 	controlfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 // //     if (controlfd == -1) {
@@ -44,7 +44,7 @@ Controller::Controller(const std::string& ip) : cap(nullptr), controlfd(-1), pho
 // // #endif
 
 // // 	controlInfo.sin_family = PF_INET;
-// // 	if (inet_pton(AF_INET, "192.168.1.224", &(controlInfo.sin_addr)) == 0) {  
+// // 	if (inet_pton(AF_INET, "192.168.1.224", &(controlInfo.sin_addr)) == 0) {
 // // 		perror("socket");
 // // 	}
 // // 	controlInfo.sin_port = htons(8080);
@@ -78,7 +78,7 @@ void Controller::setRTMPUrl(const std::string& url) {
         delete cap;
         cap = nullptr;
     }
-    
+
     try {
         cap = new VideoRTMP(url);
     } catch (const std::exception& e) {
@@ -188,12 +188,12 @@ void Controller::connectToControlSignalServer() {
             // Connection is in progress (non-blocking socket)
             fd_set write_fds;
             struct timeval timeout;
-            
+
             FD_ZERO(&write_fds);
             FD_SET(controlfd, &write_fds);
             timeout.tv_sec = 5;  // 5 second timeout
             timeout.tv_usec = 0;
-            
+
             ret = select(controlfd + 1, NULL, &write_fds, NULL, &timeout);
             if (ret == 0) {
                 std::cerr << "[Controller] Connection timeout" << std::endl;
@@ -206,7 +206,7 @@ void Controller::connectToControlSignalServer() {
                 controlfd = -1;
                 throw std::runtime_error("Select error");
             }
-            
+
             // Check if connection was successful
             int error = 0;
             socklen_t len = sizeof(error);
@@ -226,21 +226,21 @@ void Controller::connectToControlSignalServer() {
             std::cerr << "[Controller] Failed to connect to Android app for control commands" << std::endl;
             std::cerr << "[Controller] Error code: " << errno << " - " << strerror(errno) << std::endl;
             std::cerr << "[Controller] Attempting to connect to IP: " << phone_ip << " on port 8080" << std::endl;
-            
+
             close(controlfd);
             controlfd = -1;
             throw std::runtime_error("Failed to establish control connection with Android app");
         }
     }
-    
+
     std::cout << "[Controller] Successfully connected to Android app for control commands" << std::endl;
 }
 
 void Controller::sendControlSignal(const DroneCommand& cmd) {
     string controlSignal;
-    
+
     // std::cout << "[DEBUG] Preparing to send command - Type: " << static_cast<int>(cmd.type) << std::endl;
-    
+
     // Format control signal based on command type
     if (cmd.type == CommandType::CUSTOM) {
         // Apply speed limits if requested
@@ -253,7 +253,7 @@ void Controller::sendControlSignal(const DroneCommand& cmd) {
             vr = setLimitation(vr, 0, 8);
             // std::cout << "[DEBUG] After speed limit - vx: " << vx << " vy: " << vy << " vz: " << vz << " vr: " << vr << std::endl;
         }
-        controlSignal = "2,Custom," + to_string(vy) + "," + to_string(vx) + "," + to_string(vz) + "," + to_string(vr);
+        controlSignal = "2,Custom," + to_string(vx) + "," + to_string(vy) + "," + to_string(vz) + "," + to_string(vr);
     } else {
         // Handle predefined commands
         switch (cmd.type) {
@@ -273,19 +273,19 @@ void Controller::sendControlSignal(const DroneCommand& cmd) {
                 controlSignal = "1,rollLeft," + to_string(cmd.vx) + ",0,0,0";
                 break;
             case CommandType::RIGHT:
-                controlSignal = "1,rollRight," + to_string(cmd.vx) + ",0,0";
+                controlSignal = "1,rollRight," + to_string(cmd.vx) + ",0,0,0";
                 break;
             case CommandType::UP:
-                controlSignal = "1,up,0,0,0," + to_string(cmd.vz);
+                controlSignal = "1,up,0,0," + to_string(cmd.vz) + ",0";
                 break;
             case CommandType::DOWN:
-                controlSignal = "1,down,0,0,0," + to_string(cmd.vz);
+                controlSignal = "1,down,0,0," + to_string(cmd.vz) + ",0";
                 break;
             case CommandType::TURN_LEFT:
-                controlSignal = "1,yawLeft,0,0," + to_string(cmd.vr) + ",0";
+                controlSignal = "1,yawLeft,0,0,0," + to_string(cmd.vr);
                 break;
             case CommandType::TURN_RIGHT:
-                controlSignal = "1,yawRight,0,0," + to_string(cmd.vr) + ",0";
+                controlSignal = "1,yawRight,0,0,0," + to_string(cmd.vr);
                 break;
         }
     }
@@ -295,7 +295,7 @@ void Controller::sendControlSignal(const DroneCommand& cmd) {
     // Try to send the command up to 3 times
     for (int attempt = 0; attempt < 3; attempt++) {
         std::cout << "[DEBUG] Attempt " << (attempt + 1) << " to send command" << std::endl;
-        
+
         // Check connection and reconnect if needed
         if (!isConnected()) {
             std::cout << "[DEBUG] Connection lost, attempting to reconnect..." << std::endl;
@@ -348,7 +348,7 @@ void Controller::keyboardControl() {
     Mat img = imread("0.jpg");
     int key = 255;    // key = -1
     if (img.empty()) {
-        cout << "control image is not open!" << endl; 
+        cout << "control image is not open!" << endl;
     } else {
         imshow("control", img);
         key = waitKey(33);
@@ -369,7 +369,7 @@ double Controller::setLimitation(double value, double min, double max) {
     else if (abs(value) > max)
         return max * (abs(value) / value);
     else
-        return value;	
+        return value;
 }
 
 void Controller::stop() {
@@ -378,7 +378,7 @@ void Controller::stop() {
         delete cap;
         cap = nullptr;
     }
-    
+
     // Close control socket if open
     if (controlfd != -1) {
 #if defined(__unix__) || defined(__linux__)
@@ -394,11 +394,11 @@ bool Controller::isConnected() {
     if (controlfd == -1) {
         return false;
     }
-    
+
     // Check if the socket is still valid by trying to peek at incoming data
     char buf;
     int result = recv(controlfd, &buf, 1, MSG_PEEK | MSG_DONTWAIT);
-    
+
     if (result == 0) {  // Connection closed by peer
         close(controlfd);
         controlfd = -1;
@@ -412,7 +412,7 @@ bool Controller::isConnected() {
             return false;
         }
     }
-    
+
     return true;
 }
 
